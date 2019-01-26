@@ -1,8 +1,7 @@
 package discover
 
 type Service interface {
-    Endpoints() []string
-    Metadata(endpoint string) map[string]string
+    Nodes() []string
     Watch() error
     Publish(node *Node) error
 }
