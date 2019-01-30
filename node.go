@@ -1,19 +1,19 @@
-package discover
+package dig
 
 import (
-    "time"
+	"time"
 )
 
 type Node struct {
-    Name        string
-    Metadata    map[string]string
-    Timeout     uint
-    LastActive  time.Time
+	Name       string
+	Metadata   map[string]string
+	Timeout    uint
+	LastActive time.Time
 }
 
 func NewEmptyNode(name string) *Node {
-    return Node{
-        Name: name,
-        Metadata: nil,
-    }
+	return &Node{
+		Name:     name,
+		Metadata: nil,
+	}
 }

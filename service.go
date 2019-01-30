@@ -1,7 +1,7 @@
-package discover
+package dig
 
 type Service interface {
-    Nodes() []string
-    Watch() error
-    Publish(node *Node) error
+	Nodes() []string
+	Watch() error
+	Publish(node *Node) error
 }

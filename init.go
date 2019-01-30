@@ -1,1 +1,5 @@
-package discover
+package dig
+
+func init() {
+	RegisterDriver("redis", &RedisConnector{})
+}
