@@ -39,8 +39,8 @@ func main() {
 	})
 	// Start discovering other services and nodes.
 	for {
-        reg.Poll()
-        time.Sleep(time.Second)
+  		reg.Poll(nil)
+  		time.Sleep(time.Second)
 	}
 }
 ```
