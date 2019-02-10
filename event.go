@@ -16,4 +16,5 @@ type Notification struct {
 	Event uint
 	Name  string
 	*Node
+	Service
 }

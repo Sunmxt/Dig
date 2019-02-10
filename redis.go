@@ -196,6 +196,7 @@ func (r *RedisRegistry) getNode(notify func(*Notification), name string) *Node {
 				notify(&Notification{
 					Event: EVENT_NODE_FOCUS,
 					Name:  name,
+					Node:  node,
 				})
 			}
 		}
@@ -306,10 +307,23 @@ func (r *RedisRegistry) resolveNodes(notify func(*Notification), conn redis.Conn
 		err  error
 		meta map[string]string
 	)
+	removeNode := func(name string) {
+		r.nodes.Delete(name)
+		if notify != nil {
+			notify(&Notification{
+				Name:  name,
+				Event: EVENT_NODE_LOST,
+			})
+		}
+	}
 	focusNames := make([]string, 0) // TODO: optimize.
 	focusNodes := make([]*Node, 0)
 	r.VisitNodes(func(name string, node *Node) bool {
-		if err = conn.Send("HGETALL", r.prefix+"{dig-node-"+name+"}"); err != nil {
+		keyName := r.prefix + "{dig-node-" + name + "}"
+		if err = conn.Send("EXISTS", keyName); err != nil {
+			return false
+		}
+		if err = conn.Send("HGETALL", keyName); err != nil {
 			return false
 		}
 		focusNames = append(focusNames, name)
@@ -322,20 +336,22 @@ func (r *RedisRegistry) resolveNodes(notify func(*Notification), conn redis.Conn
 	if err = conn.Flush(); err != nil {
 		return err
 	}
-
 	for idx := range focusNames {
+		exists, err := redis.Bool(conn.Receive())
+		if err != nil {
+			return err
+		} else if !exists {
+			removeNode(focusNames[idx])
+			conn.Receive()
+			continue
+		}
 		if meta, err = redis.StringMap(conn.Receive()); err != nil {
 			if err != redis.ErrNil {
 				return err
 			} else {
-				r.nodes.Delete(focusNames[idx])
-				if notify != nil {
-					notify(&Notification{
-						Name:  focusNames[idx],
-						Event: EVENT_NODE_LOST,
-					})
-				}
+				removeNode(focusNames[idx])
 			}
+			continue
 		}
 		node, name := focusNodes[idx], focusNames[idx]
 		if node == nil {
@@ -408,11 +424,22 @@ func (s *RedisServiceEntry) VisitNodes(fn func(node string) bool) {
 }
 
 func (s *RedisServiceEntry) poll(notify func(*Notification), conn redis.Conn) (bool, error) {
-	updated := false
-	var err error
+	count, updated := 0, false
+	removeNode := func(name string) {
+		s.nodes.Delete(name)
+		if notify != nil {
+			notify(&Notification{
+				Event:   EVENT_SVC_NODE_LOST,
+				Name:    name,
+				Service: s,
+			})
+		}
+		conn.Send("SREM", s.registry.prefix+"{dig-service-"+s.name+"-node}", name)
+		count++
+		updated = true
+	}
 
-	nodes, err := redis.Strings(conn.Do("SMEMBERS", s.registry.prefix+"{dig-service-"+s.name+"-node}"))
-
+	nodes, err := redis.Strings(conn.Do("SMEMBERS", s.registry.prefix+"{dig-service-"+s.name+"-node}")) // Load node names of service.
 	if err != nil {
 		if err != redis.ErrNil {
 			return false, err
@@ -425,8 +452,9 @@ func (s *RedisServiceEntry) poll(notify func(*Notification), conn redis.Conn) (b
 				s.nodes.LoadOrStore(nodes[idx], struct{}{})
 				if notify != nil {
 					notify(&Notification{
-						Event: EVENT_SVC_NODE_FOUND,
-						Name:  nodes[idx],
+						Event:   EVENT_SVC_NODE_FOUND,
+						Name:    nodes[idx],
+						Service: s,
 					})
 				}
 			}
@@ -434,8 +462,10 @@ func (s *RedisServiceEntry) poll(notify func(*Notification), conn redis.Conn) (b
 	}
 	focusNodes := make([]string, 0) // TODO: optimize
 	s.VisitNodes(func(name string) bool {
-		err = conn.Send("GET", s.registry.prefix+"{dig-service-"+s.name+"-node-"+name+"-present}")
-		if err != nil {
+		if err = conn.Send("EXISTS", s.registry.prefix+"{dig-node-"+name+"}"); err != nil {
+			return false
+		}
+		if err = conn.Send("GET", s.registry.prefix+"{dig-service-"+s.name+"-node-"+name+"-present}"); err != nil {
 			return false
 		}
 		focusNodes = append(focusNodes, name)
@@ -447,21 +477,21 @@ func (s *RedisServiceEntry) poll(notify func(*Notification), conn redis.Conn) (b
 	if err = conn.Flush(); err != nil {
 		return updated, err
 	}
-	count := 0
 	for idx := range focusNodes {
-		_, err := redis.Int64(conn.Receive())
+		exists, err := redis.Bool(conn.Receive())
+		if err != nil {
+			return updated, err
+		}
+		if !exists {
+			removeNode(focusNodes[idx])
+			conn.Receive()
+			continue
+		}
+
+		_, err = redis.Int64(conn.Receive())
 		if err != nil {
 			if err == redis.ErrNil {
-				s.nodes.Delete(focusNodes[idx])
-				if notify != nil {
-					notify(&Notification{
-						Event: EVENT_SVC_NODE_LOST,
-						Name:  focusNodes[idx],
-					})
-				}
-				conn.Send("SREM", s.registry.prefix+"{dig-service-"+s.name+"-node}", focusNodes[idx])
-				count++
-				updated = true
+				removeNode(focusNodes[idx])
 			} else {
 				return updated, err
 			}
@@ -521,6 +551,10 @@ func (s *RedisServiceEntry) Nodes() []string {
 		return true
 	})
 	return nodes
+}
+
+func (s *RedisServiceEntry) Name() string {
+	return s.name
 }
 
 func (s *RedisServiceEntry) Watch() error {
